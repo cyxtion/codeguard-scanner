@@ -5,63 +5,73 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+def recursive_search(data, found_deps):
+    """
+    Recursively hunts for package-like key/values in ANY JSON structure.
+    """
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(k, str) and isinstance(v, str):
+                if len(v) < 20 and len(k) < 100 and " " not in k:
+                    found_deps[k] = v
+
+            if isinstance(v, (dict, list)):
+                recursive_search(v, found_deps)
+                
+    elif isinstance(data, list):
+        for item in data:
+            recursive_search(item, found_deps)
+
 @app.route('/scan', methods=['POST'])
 def scan_package():
-    raw_text = request.get_data(as_text=True).lower()
-    
-    if "log4j" in raw_text:
-        return jsonify({
-            "audit_results": [{
-                "package": "org.apache.logging.log4j:log4j-core",
-                "version": "2.14.1",
-                "severity": "CRITICAL",
-                "id": "CVE-2021-44228",
-                "summary": "REMOTE CODE EXECUTION (Log4Shell) - Immediate Patch Required",
-                "nist_violation": "SI-2 Flaw Remediation"
-            }]
-        })
-
     debug_log = []
-    data = {}
+    found_dependencies = {}
     
     try:
+        raw_text = request.get_data(as_text=True)
+        debug_log.append(f"RAW_INPUT_START: {raw_text} :RAW_INPUT_END")
+
         data = request.get_json(force=True, silent=True)
         if not data and raw_text:
             try:
                 data = json.loads(raw_text)
             except:
-                pass
+                data = {}
+
         if isinstance(data, str):
-             try:
-                 data = json.loads(data)
-             except:
-                 pass
-    except Exception as e:
-        data = {}
+            try:
+                data = json.loads(data)
+            except:
+                pass
 
-    dependencies = {}
-    if isinstance(data, dict):
-        dependencies = data.get('dependencies', data)
-    elif isinstance(data, list):
-        dependencies = data
+        recursive_search(data, found_dependencies)
+        cleaned_deps = {}
+        for k, v in found_dependencies.items():
+            if k.lower() not in ["input", "model", "parameters", "user", "prompt"]:
+                cleaned_deps[k] = v
         
-    final_deps = {}
-    if isinstance(dependencies, list):
-        for item in dependencies:
-            if isinstance(item, dict):
-                k = item.get('name') or item.get('package')
-                v = item.get('version')
-                if k and v: final_deps[k] = v
-    elif isinstance(dependencies, dict):
-        final_deps = dependencies
+        found_dependencies = cleaned_deps
+        debug_log.append(f"Extracted Dependencies: {json.dumps(found_dependencies)}")
 
+    except Exception as e:
+        return jsonify({"error": str(e), "debug_trace": debug_log}), 400
     report = []
+    if not found_dependencies:
+        return jsonify({
+            "audit_results": [],
+            "status": "No dependencies found",
+            "debug_trace": debug_log
+        })
 
-    for package, version in final_deps.items():
+    for package, version in found_dependencies.items():
         try:
             clean_version = str(version).replace('^', '').replace('~', '')
-            ecosystem = "Maven" if ":" in package else "npm"
             
+            if ":" in package:
+                ecosystem = "Maven"
+            else:
+                ecosystem = "npm"
+
             url = "https://api.osv.dev/v1/query"
             payload = {
                 "package": {"name": package, "ecosystem": ecosystem},
@@ -80,10 +90,13 @@ def scan_package():
                             "id": vuln['id'],
                             "summary": vuln.get('summary', 'Vulnerability Detected')
                         })
-        except:
-            pass
+        except Exception as e:
+            debug_log.append(f"Scan Error ({package}): {str(e)}")
 
-    return jsonify({"audit_results": report})
+    return jsonify({
+        "audit_results": report,
+        "debug_trace": debug_log
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8080)
