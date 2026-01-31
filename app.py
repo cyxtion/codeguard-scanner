@@ -7,39 +7,57 @@ app = Flask(__name__)
 
 @app.route('/scan', methods=['POST'])
 def scan_package():
-
+    debug_log = []
     data = {}
+    
     try:
-        data = request.get_json(force=True, silent=True) or {}
+        raw_data = request.get_data(as_text=True)
+        debug_log.append(f"Received: {raw_data[:200]}")
+        
+        data = request.get_json(force=True, silent=True)
+        if not data and raw_data:
+            try:
+                data = json.loads(raw_data)
+            except:
+                data = {}
+        
         if isinstance(data, str):
              try:
                  data = json.loads(data)
              except:
                  pass
-    except:
-        data = {}
+                 
+    except Exception as e:
+        return jsonify({"error": str(e), "debug_log": debug_log}), 400
 
     dependencies = data.get('dependencies', data)
+    
+    if isinstance(dependencies, list):
+        new_deps = {}
+        for item in dependencies:
+            if isinstance(item, dict):
+                k = item.get('name') or item.get('package')
+                v = item.get('version')
+                if k and v: 
+                    new_deps[k] = v
+        dependencies = new_deps
+
     if not isinstance(dependencies, dict):
         dependencies = {}
 
     report = []
-
-    input_str = json.dumps(dependencies).lower()
-    if "log4j" in input_str:
-        return jsonify({"audit_results": [{
-            "package": "org.apache.logging.log4j:log4j-core",
-            "version": "2.14.1",
-            "severity": "CRITICAL",
-            "id": "CVE-2021-44228",
-            "summary": "REMOTE CODE EXECUTION (Log4Shell) - Immediate Patch Required"
-        }]})
-
+    
     for package, version in dependencies.items():
         try:
             clean_version = str(version).replace('^', '').replace('~', '')
-            ecosystem = "Maven" if ":" in package else "npm"
             
+            if ":" in package:
+                ecosystem = "Maven"
+            else:
+                ecosystem = "npm"
+
+            debug_log.append(f"Checking {package} in {ecosystem}")
+
             url = "https://api.osv.dev/v1/query"
             payload = {
                 "package": {"name": package, "ecosystem": ecosystem},
@@ -54,14 +72,17 @@ def scan_package():
                         report.append({
                             "package": package,
                             "version": clean_version,
-                            "severity": "HIGH", 
+                            "severity": "CRITICAL" if "critical" in str(vuln).lower() else "HIGH",
                             "id": vuln['id'],
-                            "summary": vuln.get('summary', 'Security Vulnerability Detected')
+                            "summary": vuln.get('summary', 'Vulnerability Detected')
                         })
-        except:
-            pass
+        except Exception as e:
+            debug_log.append(f"Error: {str(e)}")
 
-    return jsonify({"audit_results": report})
+    return jsonify({
+        "audit_results": report,
+        "debug_info": debug_log 
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8080)
