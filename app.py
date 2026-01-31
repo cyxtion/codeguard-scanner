@@ -25,8 +25,6 @@ def scan_package():
 
     report = []
     
-    # Check each package against Google OSV
-    # We use .items() if it's a dict, otherwise skip
     if isinstance(dependencies, dict):
         for package, version in dependencies.items():
             clean_version = str(version).replace('^', '').replace('~', '')
@@ -57,3 +55,4 @@ def scan_package():
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8080)
+
