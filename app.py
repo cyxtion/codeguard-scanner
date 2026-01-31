@@ -9,18 +9,17 @@ app = Flask(__name__)
 def scan_package():
     debug_log = []
     data = {}
-    
+
     try:
-        raw_data = request.get_data(as_text=True)
-        debug_log.append(f"Received: {raw_data[:200]}")
-        
         data = request.get_json(force=True, silent=True)
-        if not data and raw_data:
-            try:
-                data = json.loads(raw_data)
-            except:
-                data = {}
-        
+        if not data:
+            raw_data = request.get_data(as_text=True)
+            if raw_data:
+                try:
+                    data = json.loads(raw_data)
+                except:
+                    pass
+
         if isinstance(data, str):
              try:
                  data = json.loads(data)
@@ -28,35 +27,43 @@ def scan_package():
                  pass
                  
     except Exception as e:
-        return jsonify({"error": str(e), "debug_log": debug_log}), 400
+        debug_log.append(f"Parse Error: {str(e)}")
+        data = {}
 
-    dependencies = data.get('dependencies', data)
+    dependencies = {}
+    
+    if isinstance(data, dict):
+        dependencies = data.get('dependencies', data)
+    elif isinstance(data, list):
+        dependencies = data
+    else:
+        dependencies = {}
+
+    final_deps = {}
     
     if isinstance(dependencies, list):
-        new_deps = {}
         for item in dependencies:
             if isinstance(item, dict):
-                k = item.get('name') or item.get('package')
-                v = item.get('version')
+                k = item.get('name') or item.get('package') or item.get('dependency') or item.get('key')
+                v = item.get('version') or item.get('ver') or item.get('value')
                 if k and v: 
-                    new_deps[k] = v
-        dependencies = new_deps
-
-    if not isinstance(dependencies, dict):
-        dependencies = {}
+                    final_deps[k] = v
+                    
+    elif isinstance(dependencies, dict):
+        final_deps = dependencies
 
     report = []
     
-    for package, version in dependencies.items():
+    for package, version in final_deps.items():
         try:
             clean_version = str(version).replace('^', '').replace('~', '')
-            
+
             if ":" in package:
                 ecosystem = "Maven"
             else:
                 ecosystem = "npm"
 
-            debug_log.append(f"Checking {package} in {ecosystem}")
+            debug_log.append(f"Checking {package} ({clean_version}) in {ecosystem}")
 
             url = "https://api.osv.dev/v1/query"
             payload = {
@@ -77,7 +84,7 @@ def scan_package():
                             "summary": vuln.get('summary', 'Vulnerability Detected')
                         })
         except Exception as e:
-            debug_log.append(f"Error: {str(e)}")
+            debug_log.append(f"Scan Error: {str(e)}")
 
     return jsonify({
         "audit_results": report,
