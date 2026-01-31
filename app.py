@@ -10,7 +10,6 @@ def scan_package():
     data = {}
     try:
         data = request.get_json(force=True, silent=True)
-
         if data is None:
             if request.data:
                 try:
@@ -19,19 +18,16 @@ def scan_package():
                     data = {}
             else:
                 data = {}
-
         if isinstance(data, str):
              try:
                  data = json.loads(data)
              except:
                  pass
-                 
     except Exception as e:
         print(f"Input parsing failed: {e}")
         data = {}
 
     dependencies = data.get('dependencies', data)
-
     if not isinstance(dependencies, dict):
         dependencies = {}
 
@@ -40,10 +36,15 @@ def scan_package():
     for package, version in dependencies.items():
         try:
             clean_version = str(version).replace('^', '').replace('~', '')
+            
+            if ":" in package:
+                ecosystem = "Maven"
+            else:
+                ecosystem = "npm"
 
             url = "https://api.osv.dev/v1/query"
             payload = {
-                "package": {"name": package, "ecosystem": "npm"},
+                "package": {"name": package, "ecosystem": ecosystem},
                 "version": clean_version
             }
             
